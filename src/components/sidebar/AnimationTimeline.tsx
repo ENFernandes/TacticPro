@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Play, Pause, Square, Plus, Trash2, Mic, MicOff, Clapperboard } from "lucide-react";
+import { Play, Pause, Square, Plus, Trash2, Mic, MicOff, Clapperboard, CheckSquare, Square as SquareIcon } from "lucide-react";
 import { useEditorStore } from "@/store/editor-store";
 import { AnimationPhase } from "@/types";
 
@@ -23,6 +23,11 @@ interface AnimationTimelineProps {
   isRecording?: boolean;
   currentTimeMs?: number;
   onExportVideo?: (phaseIndex: number) => void;
+  selectedPhaseIds?: string[];
+  onTogglePhaseSelected?: (phaseId: string) => void;
+  onToggleAllSelected?: () => void;
+  onCombineAndExport?: () => void;
+  canCombineExport?: boolean;
 }
 
 export default function AnimationTimeline({
@@ -43,6 +48,11 @@ export default function AnimationTimeline({
   isRecording,
   currentTimeMs,
   onExportVideo,
+  selectedPhaseIds = [],
+  onTogglePhaseSelected,
+  onToggleAllSelected,
+  onCombineAndExport,
+  canCombineExport,
 }: AnimationTimelineProps) {
   const [newPhaseName, setNewPhaseName] = useState("");
   const [newPhaseDuration, setNewPhaseDuration] = useState(2);
@@ -74,6 +84,15 @@ export default function AnimationTimeline({
           >
             <Square className="w-4 h-4" />
             Stop
+          </button>
+          <button
+            onClick={onCombineAndExport}
+            className="btn btn-primary flex items-center gap-2"
+            disabled={!canCombineExport}
+            title="Combinar seleção e exportar vídeo"
+          >
+            <Clapperboard className="w-4 h-4" />
+            Combinar e Exportar
           </button>
         </div>
       </div>
@@ -150,6 +169,17 @@ export default function AnimationTimeline({
           >
             <div className="flex items-center gap-3">
               <button
+                onClick={() => onTogglePhaseSelected?.(phase.id)}
+                className="p-1"
+                title="Selecionar fase"
+              >
+                {selectedPhaseIds.includes(phase.id) ? (
+                  <CheckSquare className="w-4 h-4" />
+                ) : (
+                  <SquareIcon className="w-4 h-4" />
+                )}
+              </button>
+              <button
                 onClick={() => onSelectPhase(index)}
                 className={`w-4 h-4 rounded-full border-2 ${
                   currentPhaseIndex === index
@@ -175,7 +205,7 @@ export default function AnimationTimeline({
                   />
                 </div>
                 <p className="text-sm text-gray-600 dark:text-gray-400">
-                  {phase.keyframes.length} keyframes • {(phase.duration / 1000).toFixed(1)}s
+                  {phase.keyframes.length} keyframes • {(phase.duration / 1000).toFixed(1)}s {selectedPhaseIds.includes(phase.id) ? '• selecionada' : ''}
                 </p>
               </div>
             </div>

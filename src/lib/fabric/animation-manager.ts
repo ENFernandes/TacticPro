@@ -283,4 +283,57 @@ export class AnimationManager {
     this.currentPhaseIndex = 0;
     this.stop();
   }
+
+  addPhaseFrom(phase: AnimationPhase): number {
+    const copy: AnimationPhase = {
+      id: phase.id,
+      name: phase.name,
+      duration: Math.max(0, phase.duration),
+      keyframes: [...phase.keyframes.map(k => ({ objectId: k.objectId, timestamp: k.timestamp, properties: { ...k.properties } }))],
+    };
+    this.phases.push(copy);
+    return this.phases.length - 1;
+  }
+
+  combinePhases(phaseIds: string[], newName: string): AnimationPhase {
+    const idSet = new Set(phaseIds);
+    const ordered = this.phases.filter(p => idSet.has(p.id));
+    if (ordered.length === 0) {
+      return {
+        id: `phase-combined-${Date.now()}`,
+        name: newName,
+        duration: 0,
+        keyframes: [],
+      };
+    }
+
+    let offset = 0;
+    const combinedKeyframes = [] as Keyframe[];
+    let totalDuration = 0;
+
+    for (const phase of ordered) {
+      const hasKf = phase.keyframes && phase.keyframes.length > 0;
+      const duration = Math.max(0, phase.duration || 0);
+      if (!hasKf) {
+        totalDuration += duration;
+        offset += duration;
+        continue;
+      }
+      const adjusted = phase.keyframes.map(k => ({
+        objectId: k.objectId,
+        timestamp: Math.max(0, k.timestamp + offset),
+        properties: { ...k.properties },
+      }));
+      combinedKeyframes.push(...adjusted);
+      totalDuration += duration;
+      offset += duration;
+    }
+
+    return {
+      id: `phase-combined-${Date.now()}`,
+      name: newName,
+      duration: Math.max(0, totalDuration),
+      keyframes: combinedKeyframes,
+    };
+  }
 }

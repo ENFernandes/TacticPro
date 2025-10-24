@@ -29,6 +29,8 @@ export default function EditorPage() {
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [canvasPlayers, setCanvasPlayers] = useState<any[]>([]);
   const canvasRef = useRef<fabric.Canvas | null>(null);
+  const [selectedPhaseIds, setSelectedPhaseIds] = useState<string[]>([]);
+  const [persistCombinedPhase, setPersistCombinedPhase] = useState(false);
 
   // Filtrar warning de textBaseline 'alphabetical' gerado pelo Fabric/Canvas
   useEffect(() => {
@@ -191,6 +193,15 @@ export default function EditorPage() {
     if (!animationManager) return;
     animationManager.setPhaseDuration(phaseId, durationMs);
     setPhases(animationManager.getPhases().map(p => ({ ...p })));
+  };
+
+  const handleTogglePhaseSelected = (phaseId: string) => {
+    setSelectedPhaseIds(prev => prev.includes(phaseId) ? prev.filter(id => id !== phaseId) : [...prev, phaseId]);
+  };
+
+  const handleToggleAllSelected = () => {
+    if (selectedPhaseIds.length === phases.length) setSelectedPhaseIds([]);
+    else setSelectedPhaseIds(phases.map(p => p.id));
   };
 
   const handleRecordToggle = (recording: boolean) => {
@@ -361,6 +372,41 @@ export default function EditorPage() {
       );
     } catch (error) {
       alert("Exportação de vídeo não suportada neste browser.");
+    }
+  };
+
+  const handleCombineAndExportSelected = async () => {
+    if (!animationManager || !canvasRef.current) return;
+    if (selectedPhaseIds.length === 0) return;
+    try {
+      // Ordenar pela ordem atual
+      const ordered = phases.filter(p => selectedPhaseIds.includes(p.id));
+      const combined = animationManager.combinePhases(ordered.map(p => p.id), "Sequência");
+      if (combined.duration <= 0 || combined.keyframes.length === 0) {
+        alert("Seleção sem conteúdo para exportar.");
+        return;
+      }
+
+      // Inserir temporariamente no fim das fases para usar o motor existente
+      const tempIndex = animationManager.addPhaseFrom(combined);
+      const cleanup = () => {
+        // Remover a fase temporária se não for para persistir
+        if (!persistCombinedPhase) {
+          animationManager.deletePhase(animationManager.getPhases()[tempIndex]?.id);
+        } else {
+          setPhases(animationManager.getPhases().map(p => ({ ...p })));
+        }
+      };
+
+      await ExportManager.exportPhaseToVideo(
+        canvasRef.current,
+        animationManager,
+        tempIndex,
+        { fps: 60, filename: `${tacticName}-combinada.webm`, mimeType: "video/webm;codecs=vp9" }
+      );
+      cleanup();
+    } catch (error) {
+      alert("Erro ao combinar e exportar vídeo.");
     }
   };
 
@@ -626,6 +672,10 @@ export default function EditorPage() {
                 Animações
               </h3>
               <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-gray-600 dark:text-gray-400">Guardar fase combinada</span>
+                  <input type="checkbox" checked={persistCombinedPhase} onChange={(e) => setPersistCombinedPhase(e.target.checked)} />
+                </div>
                 <button
                   onClick={handleCaptureKeyframe}
                   className="w-full btn btn-secondary text-xs"
@@ -697,6 +747,11 @@ export default function EditorPage() {
           isRecording={isRecording}
           currentTimeMs={currentTimeMs}
           onExportVideo={handleExportVideo}
+          selectedPhaseIds={selectedPhaseIds}
+          onTogglePhaseSelected={handleTogglePhaseSelected}
+          onToggleAllSelected={handleToggleAllSelected}
+          onCombineAndExport={handleCombineAndExportSelected}
+          canCombineExport={selectedPhaseIds.length > 0}
         />
     </div>
   );
