@@ -51,7 +51,7 @@ export interface Tactic {
 }
 
 export interface EditorState {
-  selectedTool: "select" | "player" | "arrow" | "line" | "circle" | "rectangle" | "text";
+  selectedTool: "select" | "player" | "arrow" | "line" | "circle" | "rectangle" | "text" | "ball";
   selectedFormation: string;
   isAnimating: boolean;
   currentPhase: number;

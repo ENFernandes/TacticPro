@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { fabric } from "fabric";
 import PitchCanvas from "@/components/pitch/PitchCanvas";
 import AnimationTimeline from "@/components/sidebar/AnimationTimeline";
@@ -23,9 +23,23 @@ export default function EditorPage() {
   const [phases, setPhases] = useState<AnimationPhase[]>([]);
   const [currentPhaseIndex, setCurrentPhaseIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [currentTimeMs, setCurrentTimeMs] = useState(0);
+  const lastAutoCaptureRef = useRef<Record<string, number>>({});
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [canvasPlayers, setCanvasPlayers] = useState<any[]>([]);
   const canvasRef = useRef<fabric.Canvas | null>(null);
+
+  // Filtrar warning de textBaseline 'alphabetical' gerado pelo Fabric/Canvas
+  useEffect(() => {
+    const originalWarn = console.warn;
+    const pattern = "The provided value 'alphabetical' is not a valid enum value of type CanvasTextBaseline.";
+    console.warn = (...args: any[]) => {
+      if (typeof args[0] === 'string' && args[0].includes(pattern)) return;
+      return originalWarn(...args);
+    };
+    return () => { console.warn = originalWarn; };
+  }, []);
 
 
   const handleDeleteSelected = () => {
@@ -37,6 +51,15 @@ export default function EditorPage() {
       }
     }
   };
+
+  // Manter AnimationManager sincronizado após Fast Refresh/HMR
+  useEffect(() => {
+    if (!animationManager) return;
+    const mgrPhases = animationManager.getPhases();
+    if (phases.length > 0 && mgrPhases.length !== phases.length) {
+      animationManager.setPhases(phases);
+    }
+  }, [animationManager, phases]);
 
   const handleToggleZoomMode = () => {
     const newMode = state.zoomMode === "full" ? "half" : "full";
@@ -126,14 +149,14 @@ export default function EditorPage() {
       animationManager.stop();
       setIsPlaying(false);
       setCurrentPhaseIndex(0);
+      setCurrentTimeMs(0);
     }
   };
 
-  const handleAddPhase = () => {
-    if (animationManager) {
-      const phase = animationManager.addPhase(`Fase ${phases.length + 1}`);
-      setPhases([...phases, phase]);
-    }
+  const handleAddPhase = (name: string, durationMs: number) => {
+    if (!animationManager) return;
+    const phase = animationManager.addPhase(name || `Fase ${phases.length + 1}`, durationMs || 2000);
+    setPhases([...phases, phase]);
   };
 
   const handleDeletePhase = (phaseId: string) => {
@@ -147,15 +170,127 @@ export default function EditorPage() {
 
   const handleSelectPhase = (index: number) => {
     setCurrentPhaseIndex(index);
+    setCurrentTimeMs(0);
   };
 
   const handleCaptureKeyframe = () => {
     if (animationManager && phases.length > 0) {
       const currentPhase = phases[currentPhaseIndex];
-      animationManager.captureCurrentPositions(currentPhase.id);
+      animationManager.captureCurrentPositions(currentPhase.id, currentTimeMs);
       setPhases([...phases]); // Trigger re-render
     }
   };
+
+  const handleRenamePhase = (phaseId: string, name: string) => {
+    if (!animationManager) return;
+    animationManager.renamePhase(phaseId, name);
+    setPhases(animationManager.getPhases().map(p => ({ ...p })));
+  };
+
+  const handleChangeDuration = (phaseId: string, durationMs: number) => {
+    if (!animationManager) return;
+    animationManager.setPhaseDuration(phaseId, durationMs);
+    setPhases(animationManager.getPhases().map(p => ({ ...p })));
+  };
+
+  const handleRecordToggle = (recording: boolean) => {
+    if (!animationManager) return;
+    if (recording) {
+      // Garantir que existe pelo menos uma fase
+      if (phases.length === 0) {
+        const created = animationManager.addPhase(`Fase 1`, 4000);
+        setPhases([created]);
+        setCurrentPhaseIndex(0);
+      }
+      animationManager.startRecording(currentPhaseIndex);
+      setIsRecording(true);
+      // Capturar estado inicial t=0
+      const currentPhase = phases[currentPhaseIndex];
+      const phaseToUse = currentPhase || animationManager.getPhases()[0];
+      if (phaseToUse) {
+        animationManager.captureCurrentPositions(phaseToUse.id, 0);
+        setPhases([...phases]);
+      }
+    } else {
+      // Capturar estado final antes de parar
+      const currentPhase = phases[currentPhaseIndex];
+      if (currentPhase) {
+        const ts = animationManager.getCurrentTimeMs();
+        animationManager.captureCurrentPositions(currentPhase.id, ts);
+        setPhases([...phases]);
+      }
+      animationManager.stopRecording();
+      setIsRecording(false);
+    }
+  };
+
+  const handleSeek = (ms: number) => {
+    if (!animationManager) return;
+    setCurrentTimeMs(ms);
+    animationManager.seek(currentPhaseIndex, ms);
+  };
+
+  // Captura automática de keyframes quando objetos são modificados durante a gravação
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !animationManager) return;
+
+    const handleObjectModified = (e: any) => {
+      if (!isRecording) return;
+      const phase = phases[currentPhaseIndex];
+      if (!phase) return;
+      const obj = e?.target as any;
+      if (!obj) return;
+
+      const objectId = obj.playerId || obj.arrowId || obj.customId || obj.name || obj.type;
+      if (!objectId) return;
+      const nowTs = animationManager.getCurrentTimeMs();
+      const lastTs = lastAutoCaptureRef.current[objectId] ?? -Infinity;
+      if (nowTs - lastTs < 80) return;
+      lastAutoCaptureRef.current[objectId] = nowTs;
+      animationManager.addKeyframe(phase.id, objectId, {
+        left: obj.left || 0,
+        top: obj.top || 0,
+        opacity: obj.opacity || 1,
+        angle: obj.angle || 0,
+      }, nowTs);
+      setPhases([...phases]);
+    };
+
+    canvas.on('object:modified', handleObjectModified);
+    return () => {
+      canvas.off('object:modified', handleObjectModified);
+    };
+  }, [canvasRef.current, isRecording, animationManager, phases, currentPhaseIndex]);
+
+  // Avançar o slider durante reprodução
+  useEffect(() => {
+    if (!isPlaying || !animationManager) return;
+    let raf: number;
+    const tick = () => {
+      const t = animationManager.getCurrentTimeMs();
+      const phase = phases[currentPhaseIndex];
+      if (phase) {
+        setCurrentTimeMs(Math.min(t, phase.duration));
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [isPlaying, animationManager, phases, currentPhaseIndex]);
+
+  // Avançar o slider de tempo enquanto grava
+  useEffect(() => {
+    if (!isRecording || !animationManager) return;
+    let raf: number;
+    const tick = () => {
+      const t = animationManager.getCurrentTimeMs();
+      setCurrentTimeMs(t);
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [isRecording, animationManager, phases, currentPhaseIndex]);
 
   const handleExportPNG = async () => {
     if (!canvasRef.current) return;
@@ -215,6 +350,20 @@ export default function EditorPage() {
     }
   };
 
+  const handleExportVideo = async (phaseIndex: number) => {
+    if (!canvasRef.current || !animationManager) return;
+    try {
+      await ExportManager.exportPhaseToVideo(
+        canvasRef.current,
+        animationManager,
+        phaseIndex,
+        { fps: 60, filename: `${tacticName}-fase-${phaseIndex + 1}.webm` }
+      );
+    } catch (error) {
+      alert("Exportação de vídeo não suportada neste browser.");
+    }
+  };
+
   // Auto-save hook
   useAutoSave({
     canvas: canvasRef.current,
@@ -235,6 +384,8 @@ export default function EditorPage() {
     onStop: handleStop,
     onSelectTool: setSelectedTool,
     onDeleteSelected: handleDeleteSelected,
+    onToggleRecord: () => handleRecordToggle(!isRecording),
+    onCapture: handleCaptureKeyframe,
   });
 
   return (
@@ -425,6 +576,17 @@ export default function EditorPage() {
                 >
                   Texto
                 </button>
+                <button
+                  onClick={() => setSelectedTool("ball")}
+                  className={`p-2 rounded-md text-xs transition-colors ${
+                    state.selectedTool === "ball"
+                      ? "bg-blue-100 dark:bg-blue-900 text-blue-900 dark:text-blue-100"
+                      : "hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300"
+                  }`}
+                  title="Adicionar bola"
+                >
+                  Bola
+                </button>
               </div>
             </div>
 
@@ -501,7 +663,9 @@ export default function EditorPage() {
               className="w-full h-full max-w-none max-h-none" 
               onAnimationManagerReady={handleAnimationManagerReady}
               onCanvasReady={handleCanvasReady}
-              onPlayersUpdate={handlePlayersUpdate}
+            onPlayersUpdate={handlePlayersUpdate}
+            isRecording={isRecording}
+            currentTimeMs={currentTimeMs}
             />
           </div>
         </main>
@@ -515,8 +679,7 @@ export default function EditorPage() {
       </div>
 
       {/* Timeline de Animação */}
-      {phases.length > 0 && (
-        <AnimationTimeline
+      <AnimationTimeline
           phases={phases}
           currentPhaseIndex={currentPhaseIndex}
           isPlaying={isPlaying}
@@ -526,8 +689,15 @@ export default function EditorPage() {
           onAddPhase={handleAddPhase}
           onDeletePhase={handleDeletePhase}
           onSelectPhase={handleSelectPhase}
+          onRenamePhase={handleRenamePhase}
+          onChangeDuration={handleChangeDuration}
+          onRecordToggle={handleRecordToggle}
+          onSeek={handleSeek}
+          onCapture={handleCaptureKeyframe}
+          isRecording={isRecording}
+          currentTimeMs={currentTimeMs}
+          onExportVideo={handleExportVideo}
         />
-      )}
     </div>
   );
 }

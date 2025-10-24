@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { fabric } from "fabric";
 import { useEditorStore } from "@/store/editor-store";
 import { FORMATIONS } from "@/lib/formations";
@@ -15,9 +16,11 @@ interface PitchCanvasProps {
   onAnimationManagerReady?: (manager: AnimationManager) => void;
   onCanvasReady?: (canvas: fabric.Canvas) => void;
   onPlayersUpdate?: (players: any[]) => void;
+  isRecording?: boolean;
+  currentTimeMs?: number;
 }
 
-export default function PitchCanvas({ className, onAnimationManagerReady, onCanvasReady, onPlayersUpdate }: PitchCanvasProps) {
+export default function PitchCanvas({ className, onAnimationManagerReady, onCanvasReady, onPlayersUpdate, isRecording, currentTimeMs }: PitchCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const fabricCanvasRef = useRef<fabric.Canvas | null>(null);
   const animationManagerRef = useRef<AnimationManager | null>(null);
@@ -28,6 +31,33 @@ export default function PitchCanvas({ className, onAnimationManagerReady, onCanv
   const [isEditingText, setIsEditingText] = useState(false);
   const fieldImageRef = useRef<fabric.Image | null>(null);
   const { state, setZoomMode, playerNames, setPlayerName } = useEditorStore();
+
+  // Corrigir valor inválido 'alphabetical' para textBaseline em alguns ambientes
+  useEffect(() => {
+    try {
+      const proto = (CanvasRenderingContext2D as any)?.prototype;
+      if (!proto) return;
+      const desc = Object.getOwnPropertyDescriptor(proto, 'textBaseline');
+      if (!desc || (!desc.get && !desc.set)) {
+        let _val: string = 'alphabetic';
+        Object.defineProperty(proto, 'textBaseline', {
+          configurable: true,
+          enumerable: true,
+          get() { return _val; },
+          set(v: any) { _val = v === 'alphabetical' ? 'alphabetic' : v; }
+        });
+      } else {
+        Object.defineProperty(proto, 'textBaseline', {
+          configurable: true,
+          enumerable: true,
+          get: desc.get ? desc.get.bind(proto) : (() => 'alphabetic'),
+          set: desc.set
+            ? function(this: any, v: any) { return desc.set!.call(this, v === 'alphabetical' ? 'alphabetic' : v); }
+            : function(this: any, v: any) { (this as any)._tb = v === 'alphabetical' ? 'alphabetic' : v; }
+        });
+      }
+    } catch {}
+  }, []);
 
   // Função para gerenciar teclas (Delete/Backspace/E)
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
@@ -697,6 +727,11 @@ export default function PitchCanvas({ className, onAnimationManagerReady, onCanv
     // Criar AnimationManager
     const animationManager = new AnimationManager(canvas);
     animationManagerRef.current = animationManager;
+    // Expor referências globais para automação/testes
+    if (typeof window !== 'undefined') {
+      (window as any).__fabricCanvas = canvas;
+      (window as any).__animationManager = animationManager;
+    }
     onAnimationManagerReady?.(animationManager);
 
     // Notificar que o canvas está pronto
@@ -973,6 +1008,7 @@ export default function PitchCanvas({ className, onAnimationManagerReady, onCanv
     if (!fabricCanvasRef.current || !isLoaded) return;
 
     const canvas = fabricCanvasRef.current;
+    let recordingListenerAdded = false;
     let isDrawing = false;
     let startPoint: { x: number; y: number } | null = null;
 
@@ -1005,7 +1041,9 @@ export default function PitchCanvas({ className, onAnimationManagerReady, onCanv
           fill: "",
           stroke: "#FF0000",
           strokeWidth: 2,
+          name: "circle",
         });
+        (circle as any).customId = `circle-${Date.now()}-${Math.random().toString(36).slice(2)}`;
         canvas.add(circle);
         canvas.renderAll();
       } else if (state.selectedTool === "text") {
@@ -1017,13 +1055,14 @@ export default function PitchCanvas({ className, onAnimationManagerReady, onCanv
           fill: "#000000",
           fontFamily: "Arial",
           selectable: true,
-          name: "text-object",
+          name: "text",
           textAlign: "left",
           originX: "left",
           originY: "top",
           scaleX: 1,
           scaleY: 1,
         });
+        (text as any).customId = `text-${Date.now()}-${Math.random().toString(36).slice(2)}`;
         canvas.add(text);
         canvas.setActiveObject(text);
         canvas.renderAll();
@@ -1111,6 +1150,21 @@ export default function PitchCanvas({ className, onAnimationManagerReady, onCanv
             console.error('Erro ao tentar editar texto recém-criado:', error);
           }
         }, 200);
+      } else if (state.selectedTool === "ball") {
+        const pointer = canvas.getPointer(e.e);
+        // Bola: círculo pequeno com padrão simples
+        const ball = new fabric.Circle({
+          left: pointer.x - 8,
+          top: pointer.y - 8,
+          radius: 8,
+          fill: "#FFFFFF",
+          stroke: "#000000",
+          strokeWidth: 1,
+          name: "ball",
+        });
+        (ball as any).customId = `ball-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        canvas.add(ball);
+        canvas.renderAll();
       }
     };
 
@@ -1159,7 +1213,9 @@ export default function PitchCanvas({ className, onAnimationManagerReady, onCanv
         const line = new fabric.Line([startPoint.x, startPoint.y, pointer.x, pointer.y], {
           stroke: "#FF0000",
           strokeWidth: 2,
+          name: "line",
         });
+        (line as any).customId = `line-${Date.now()}-${Math.random().toString(36).slice(2)}`;
         canvas.add(line);
       }
 
@@ -1216,7 +1272,14 @@ export default function PitchCanvas({ className, onAnimationManagerReady, onCanv
         
         {/* Indicador de dimensões durante redimensionamento */}
       </div>
-      
+      {isRecording && typeof window !== 'undefined' && createPortal(
+        <div className="fixed top-3 left-3 z-50 flex items-center gap-2 bg-red-600 text-white px-3 py-1 rounded-full shadow">
+          <span className="inline-block w-2 h-2 rounded-full bg-white animate-pulse"></span>
+          <span>A gravar</span>
+          <span className="ml-1 text-xs">{(((currentTimeMs || 0) / 1000).toFixed(1))}s</span>
+        </div>,
+        document.body
+      )}
       {/* Editor de Jogador */}
       {editingPlayer && (
         <PlayerEditor

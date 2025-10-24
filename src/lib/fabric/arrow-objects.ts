@@ -17,6 +17,7 @@ export class ArrowObject extends fabric.Polyline {
     });
 
     this.arrowId = options.arrowId;
+    (this as any).name = "arrow";
   }
 
   static createArrow(x1: number, y1: number, x2: number, y2: number, arrowId: string): ArrowObject {
@@ -39,6 +40,14 @@ export class ArrowObject extends fabric.Polyline {
     ];
     
     return new ArrowObject(points, { arrowId });
+  }
+
+  // Incluir arrowId na serialização para persistência
+  toObject(propertiesToInclude?: string[]) {
+    return fabric.util.object.extend(super.toObject(propertiesToInclude), {
+      arrowId: this.arrowId,
+      name: (this as any).name || "arrow",
+    });
   }
 
   static fromObject(object: any): ArrowObject {

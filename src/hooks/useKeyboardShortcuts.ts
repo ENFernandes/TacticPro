@@ -12,6 +12,8 @@ interface KeyboardShortcutsProps {
   onStop: () => void;
   onSelectTool: (tool: EditorState["selectedTool"]) => void;
   onDeleteSelected?: () => void;
+  onToggleRecord?: () => void;
+  onCapture?: () => void;
 }
 
 export function useKeyboardShortcuts({
@@ -23,6 +25,8 @@ export function useKeyboardShortcuts({
   onStop,
   onSelectTool,
   onDeleteSelected,
+  onToggleRecord,
+  onCapture,
 }: KeyboardShortcutsProps) {
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -65,6 +69,20 @@ export function useKeyboardShortcuts({
         return;
       }
 
+      // R - Gravar/Parar gravação
+      if ((key === "r" || key === "R") && !isCtrlOrCmd) {
+        event.preventDefault();
+        onToggleRecord?.();
+        return;
+      }
+
+      // K - Capturar estado
+      if ((key === "k" || key === "K") && !isCtrlOrCmd) {
+        event.preventDefault();
+        onCapture?.();
+        return;
+      }
+
       // Escape - Stop
       if (key === "Escape") {
         event.preventDefault();
@@ -72,8 +90,8 @@ export function useKeyboardShortcuts({
         return;
       }
 
-      // Ferramentas (1-6)
-      if (key >= "1" && key <= "6") {
+      // Ferramentas (1-7)
+      if (key >= "1" && key <= "7") {
         event.preventDefault();
         const toolMap: { [key: string]: EditorState["selectedTool"] } = {
           "1": "select",
@@ -82,6 +100,7 @@ export function useKeyboardShortcuts({
           "4": "line",
           "5": "circle",
           "6": "text",
+          "7": "ball",
         };
         onSelectTool(toolMap[key]);
         return;
@@ -109,5 +128,7 @@ export function useKeyboardShortcuts({
     onStop,
     onSelectTool,
     onDeleteSelected,
+    onToggleRecord,
+    onCapture,
   ]);
 }

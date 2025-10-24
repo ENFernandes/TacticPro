@@ -2,6 +2,7 @@ import html2canvas from "html2canvas";
 import jsPDF from "jspdf";
 import { fabric } from "fabric";
 import { Tactic } from "@/types";
+import { AnimationManager } from "@/lib/fabric/animation-manager";
 
 export class ExportManager {
   static async exportToPNG(canvas: fabric.Canvas, filename?: string): Promise<void> {
@@ -200,5 +201,104 @@ export class ExportManager {
       throw error;
     }
   }
+
+  static async exportPhaseToVideo(
+    canvas: fabric.Canvas,
+    animationManager: AnimationManager,
+    phaseIndex: number,
+    options?: { fps?: number; filename?: string; bitrate?: number; mimeType?: string }
+  ): Promise<void> {
+    const htmlCanvas = canvas.getElement() as HTMLCanvasElement;
+    const fps = Math.max(1, Math.min(120, options?.fps ?? 60));
+
+    const isMediaRecorderAvailable = typeof window !== "undefined" && typeof (window as any).MediaRecorder !== "undefined";
+    const canCapture = typeof htmlCanvas.captureStream === "function";
+    if (!isMediaRecorderAvailable || !canCapture) {
+      throw new Error("Exportação de vídeo não suportada neste navegador.");
+    }
+
+    const preferredTypes = [
+      options?.mimeType || "",
+      "video/mp4;codecs=h264",
+      "video/webm;codecs=vp9",
+      "video/webm;codecs=vp8",
+      "video/webm"
+    ].filter(Boolean);
+
+    const pickMime = (types: string[]) => {
+      const MR: any = (window as any).MediaRecorder;
+      for (const t of types) {
+        if (MR.isTypeSupported?.(t)) return t;
+      }
+      return "";
+    };
+
+    const mimeType = pickMime(preferredTypes);
+    if (!mimeType) {
+      throw new Error("Nenhum formato de vídeo suportado encontrado.");
+    }
+
+    const stream = htmlCanvas.captureStream(fps);
+    const Recorder: any = (window as any).MediaRecorder;
+    const recorder = new Recorder(stream, {
+      mimeType,
+      videoBitsPerSecond: options?.bitrate ?? 6_000_000,
+    });
+
+    const chunks: BlobPart[] = [];
+    await new Promise<void>((resolve, reject) => {
+      let raf = 0;
+      const onData = (e: any) => { if (e.data && e.data.size > 0) chunks.push(e.data); };
+      const onStop = () => { cancelAnimationFrame(raf); resolve(); };
+      const onError = (e: any) => { cancelAnimationFrame(raf); reject(e?.error || e); };
+
+      recorder.addEventListener("dataavailable", onData);
+      recorder.addEventListener("stop", onStop);
+      recorder.addEventListener("error", onError);
+
+      try {
+        const phases = animationManager.getPhases();
+        const phase = phases[phaseIndex];
+        if (!phase || phase.keyframes.length === 0 || phase.duration <= 0) {
+          recorder.removeEventListener("dataavailable", onData);
+          recorder.removeEventListener("stop", onStop);
+          recorder.removeEventListener("error", onError);
+          reject(new Error("Fase inválida para exportação."));
+          return;
+        }
+
+        animationManager.seek(phaseIndex, 0);
+        canvas.renderAll();
+        recorder.start();
+        animationManager.play(phaseIndex);
+
+        const startMs = Date.now();
+        const endMs = startMs + phase.duration + 120;
+        const tick = () => {
+          if (Date.now() >= endMs) {
+            try { recorder.stop(); } catch {}
+            stream.getTracks().forEach(t => t.stop());
+            return;
+          }
+          raf = requestAnimationFrame(tick);
+        };
+        raf = requestAnimationFrame(tick);
+      } catch (err) {
+        try { recorder.stop(); } catch {}
+        stream.getTracks().forEach(t => t.stop());
+        reject(err);
+      }
+    });
+
+    const blob = new Blob(chunks, { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    const extension = mimeType.includes("mp4") ? "mp4" : "webm";
+    link.download = options?.filename || `fase-${Date.now()}.${extension}`;
+    link.href = url;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
 }
+
 
